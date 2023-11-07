@@ -34,6 +34,7 @@ The resulting executable JAR file will be in the `target/` directory.
 
  * [AWS IoT Device SDK for Java v2](https://github.com/aws/aws-iot-device-sdk-java-v2)  
  * [Apache Maven](https://github.com/apache/maven)  
+ * [Apache Commons CLI](https://commons.apache.org/proper/commons-cli/)  
 
 
 ## Related Resources for Further Information  
