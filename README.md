@@ -5,7 +5,8 @@
 
 ## Overview  
 
-Security assessment tool for enumeration of AWS IoT Core (data plane) using compromised IoT device keys.  
+Security assessment tool for enumeration of [AWS IoT Core](https://aws.amazon.com/iot-core/)
+(data plane) using compromised IoT device keys.  
 
 
 ## Disclaimer  
