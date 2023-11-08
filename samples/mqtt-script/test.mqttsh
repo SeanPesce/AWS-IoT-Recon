@@ -1,0 +1,69 @@
+# MQTT Testing Script
+# Author: Sean Pesce
+#
+# Next line is blank (expected behavior: ignore)
+
+# Instruction testing
+SUB	testTopic1
+# Testing preceding whitespace (expected behavior: auto-trim, parse, and execute)
+  PUB	testTopic1	testPayload1
+# Testing mixed-case opcode (expected behavior: parse and execute)
+SLeEp	1000
+UNSUB	testTopic1
+
+# Next payload should NOT be received
+PUB	testTopic1	testPayload2
+
+# Testing single-level wildcard topic filters
+SUB	testTopic2/+
+# Next payload should be received
+PUB	testTopic2/test	testPayload3
+# Next payload should NOT be received
+PUB	testTopic2/test/test	testPayload4
+SLEEP	1000
+UNSUB	testTopic2/+
+
+# Next line has various whitespace (expected behavior: ignore)
+   
+# Next line has whitespace followed by a comment (expected behavior: ignore)
+   # Comment
+
+# Testing subtree wildcard topic filters
+SUB	testTopic3/#
+# Next payload should be received
+PUB	testTopic3/test	testPayload5
+# Next payload should be received
+PUB	testTopic3/test/test	testPayload6
+SLEEP	1000
+UNSUB	testTopic3/#
+
+# Testing special payload types
+SUB	testTopic4
+# The next Instruction will only work if the program is executed from the project's root directory
+PUB	testTopic4	file://samples/mqtt-script/filePayload.txt
+# Encoded payload: "hexPayload1"
+PUB	testTopic4	hex://6865785061796c6f616431
+# Encoded payload: "hexPayload2"
+PUB	testTopic4	hex://68 65 7850 61 79 6c 6F  61 64   32
+# Encoded payload: "hex\nPayload3"
+PUB	testTopic4	hex://6865780a5061796c6f616433
+# Encoded payload: "hex\tPayload4"
+PUB	testTopic4	hex://686578095061796c6f616434
+SLEEP	1000
+UNSUB	testTopic4
+
+
+SLEEP	500
+
+
+# If all tests pass, the following messages should be received:
+#   testTopic1 testPayload1
+#   testTopic2/test testPayload3
+#   testTopic3/test testPayload5
+#   testTopic3/test/test testPayload6
+#   testTopic4 filePayload
+#   testTopic4 hexPayload1
+#   testTopic4 hexPayload2
+#   testTopic4 hex\nPayload3
+#   testTopic4 hex	Payload4
+

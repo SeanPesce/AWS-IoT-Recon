@@ -8,6 +8,20 @@
 Security assessment tool for enumeration of [AWS IoT Core](https://aws.amazon.com/iot-core/)
 (data plane) using compromised IoT device keys.  
 
+More information about this project (and the research that led to its development)
+can be found on my [security research blog](https://seanpesce.blogspot.com/2023/11/aws-iot-core-compromised-device.html).  
+
+
+## Usage  
+
+```
+java -jar aws-iot-recon.jar -H <host> -a <action> [options]
+```
+
+See also:  
+
+ * [MQTT scripting documentation](docs/MQTT_Scripting.md).  
+
 
 ## Disclaimer  
 
@@ -37,10 +51,11 @@ The resulting executable JAR file will be in the `target/` directory.
  * [Apache Commons CLI](https://commons.apache.org/proper/commons-cli/)  
 
 
-## Related Resources for Further Information  
+## Related Resources  
 
  * [AWS Skill Builder - Deep Dive into AWS IoT Authentication and Authorization](https://explore.skillbuilder.aws/learn/course/external/view/elearning/5667/deep-dive-into-aws-iot-authentication-and-authorization)
  * [AWS Skill Builder - Introduction to IoT Device Defender](https://explore.skillbuilder.aws/learn/course/310/play/25424/introduction-to-iot-device-defender)
+ * [AWS IoT Core Developer Guide](https://docs.aws.amazon.com/iot/latest/developerguide)
 
 
 ## Contact  
