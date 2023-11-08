@@ -8,7 +8,7 @@
 //
 // @TODO:
 //   - Re-architect this tool to be more object-oriented (e.g., fewer static/global variables)
-//   - Look into AWS IoT Defender - what are the potential repurcussions of using the AwsIotRecon tool against a well-defended instance (e.g., lock-out, client key revocation, etc.)?
+//   - Use CountDownLatch(count) in subscription message handlers for improved reliability
 
 package com.seanpesce.aws.iot;
 
@@ -35,6 +35,7 @@ import java.util.regex.Matcher;
 
 import com.seanpesce.aws.iot.AwsIotConstants;
 import com.seanpesce.http.MtlsHttpClient;
+import com.seanpesce.mqtt.MqttScript;
 import com.seanpesce.regex.PatternWithNamedGroups;
 import com.seanpesce.Util;
 
@@ -69,7 +70,7 @@ public class AwsIotRecon {
 
     public static String jarName = AwsIotRecon.class.getSimpleName() + ".jar";
     
-    // 
+    // Run-time resources
     public static CommandLine cmd = null;
     public static String clientId = null;
     public static MqttClientConnection clientConnection = null;
@@ -112,7 +113,7 @@ public class AwsIotRecon {
     
 
 
-    public static void main(String[] args) throws CertificateException, IOException, KeyStoreException, NoSuchAlgorithmException, org.apache.commons.cli.ParseException, InterruptedException {
+    public static void main(String[] args) throws CertificateException, IOException, KeyStoreException, NoSuchAlgorithmException, org.apache.commons.cli.ParseException, InterruptedException, ExecutionException {
 
         cmd = parseCommandLineArguments(args);
         buildConnection(cmd);
@@ -128,6 +129,10 @@ public class AwsIotRecon {
 
         } else if (action.equals(AwsIotConstants.ACTION_IAM_CREDS)) {
             getIamCredentialsFromDeviceX509(cmd.hasOption("R") ? cmd.getOptionValue("R") : "admin", cmd.hasOption("t") ? cmd.getOptionValue("t") : clientId);
+
+        } else if (action.equals(AwsIotConstants.ACTION_MQTT_SCRIPT)) {
+            mqttConnect();
+            runMqttScript(cmd.getOptionValue("f"));
 
         } else if (action.equals(AwsIotConstants.ACTION_MQTT_DATA_EXFIL)) {
             mqttConnect();
@@ -147,9 +152,7 @@ public class AwsIotRecon {
             getRetainedMqttMessages();
         }
 
-
         // System.exit(0);
-
     }
 
 
@@ -220,6 +223,8 @@ public class AwsIotRecon {
         opts.addOption(optCustomAuthTokKey);
         Option optCustomAuthTokVal = Option.builder(null).longOpt("custom-auth-tok-val").argName("value").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer token value").type(String.class).build();
         opts.addOption(optCustomAuthTokVal);
+        Option optMqttScript = Option.builder("f").longOpt("script").argName("file").hasArg(true).required(false).desc("MQTT script file (required for " + AwsIotConstants.ACTION_MQTT_SCRIPT + " action)").type(String.class).build();
+        opts.addOption(optMqttScript);
         // Option optAwsRegion = Option.builder("r").longOpt("region").argName("region").hasArg(true).required(false).desc("AWS instance region (e.g., \"us-west-2\")").type(String.class).build();
         // opts.addOption(optAwsRegion);
 
@@ -246,7 +251,6 @@ public class AwsIotRecon {
         //
         //        Other miscellaneous options:
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withWill(software.amazon.awssdk.crt.mqtt.MqttMessage)
-
 
         CommandLine cmd = null;
         CommandLineParser cmdParser = new BasicParser();
@@ -331,6 +335,12 @@ public class AwsIotRecon {
                 throw new IllegalArgumentException("Operation " + action + " requires a role to be specified with \"-R\"");
             }
 
+        } else if (action.equals(AwsIotConstants.ACTION_MQTT_SCRIPT)) {
+            if (!cmd.hasOption("f")) {
+                System.err.println("[ERROR] \"" + action + "\" action requires an MQTT script file (\"-f\")");
+                System.exit(3);
+            }
+
         } else if (action.equals(AwsIotConstants.ACTION_MQTT_DATA_EXFIL)) {
             // Nothing required except auth data
         
@@ -372,6 +382,7 @@ public class AwsIotRecon {
 
         }
 
+        // Determine authentication mechanism
         if (cmd.hasOption("c") && cmd.hasOption("k")) {
             // mTLS using specified client certificate and private key
             String cert = Util.getTextFileDataFromOptionalPath(cmd.getOptionValue("c"));
@@ -408,7 +419,7 @@ public class AwsIotRecon {
                 tlsCtxOpts = TlsContextOptions.createWithMtlsPkcs12​(ksPath, ksPw);
             }
 
-        } else if (cmd.hasOption("W")) {
+        } else if (cmd.hasOption("windows-cert-store")) {
             // mTLS using Windows certificate store
             String winStorePath = cmd.getOptionValue("W");
             connBuilder = AwsIotMqttConnectionBuilder.newMtlsWindowsCertStorePathBuilder(winStorePath);
@@ -554,15 +565,17 @@ public class AwsIotRecon {
 
 
     // Dump all MQTT messages received via subscribed MQTT topics. Runs forever (or until cancelled by the user with Ctrl+C)
-    public static void beginMqttDump() {
+    public static void beginMqttDump() throws InterruptedException, ExecutionException {
         final List<String> topics = buildMqttTopicList();
         
         for (final String topic : topics) {
             System.err.println("[INFO] Subscribing to topic for MQTT dump (\"" + topic + "\")");
-            clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer).exceptionally((Throwable throwable) -> {
+            CompletableFuture<Integer> subscription = clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer);
+            subscription.exceptionally((Throwable throwable) -> {
                 System.err.println("[ERROR] Failed to process message for " + topic + ": " + throwable.toString());
                 return -1;
             });
+            subscription.get();
         }
 
         Util.sleepForever();
@@ -572,15 +585,17 @@ public class AwsIotRecon {
 
     // Extract known data fields from subscribed MQTT topics. Runs forever (or until cancelled by the user with Ctrl+C).
     // Note that this only extracts data from the topic itself, and ignores MQTT message payloads.
-    public static void beginMqttTopicFieldHarvesting() {
+    public static void beginMqttTopicFieldHarvesting() throws InterruptedException, ExecutionException {
         final List<String> topics = buildMqttTopicList();
 
         for (final String topic : topics) {
             System.err.println("[INFO] Subscribing to topic for topic field harvesting (\"" + topic + "\")");
-            clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, topicFieldHarvester).exceptionally((Throwable throwable) -> {
+            CompletableFuture<Integer> subscription = clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, topicFieldHarvester);
+            subscription.exceptionally((Throwable throwable) -> {
                 System.err.println("[ERROR] Failed to process message for " + topic + ": " + throwable.toString());
                 return -1;
             });
+            subscription.get();
         }
         
         Util.sleepForever();
@@ -588,7 +603,7 @@ public class AwsIotRecon {
 
 
     // Test whether the AWS IoT service can be used for data exfiltration via arbitrary topics
-    public static void testDataExfilChannel() {
+    public static void testDataExfilChannel() throws InterruptedException, ExecutionException {
         final String timestamp = "" + System.currentTimeMillis();
 
         ArrayList<String> topics = new ArrayList<String>();
@@ -615,14 +630,17 @@ public class AwsIotRecon {
         // Subscribe to the data exfiltration topic(s)
         for (final String topic : topics) {
             System.err.println("[INFO] Testing data exfiltration via arbitrary topics (using topic: \"" + topic + "\")");
-            clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, dataExfilConsumer).exceptionally((Throwable throwable) -> {
+            CompletableFuture<Integer> subscription = clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, dataExfilConsumer);
+            subscription.exceptionally((Throwable throwable) -> {
                 System.err.println("[ERROR] Failed to process message for " + topic + ": " + throwable.toString());
                 return -1;
             });
+            subscription.get();
 
             // Publish data to the data exfiltration topic
             MqttMessage msg = new MqttMessage(topic, timestamp.getBytes(StandardCharsets.UTF_8), QualityOfService.AT_LEAST_ONCE);
-            clientConnection.publish(msg);
+            CompletableFuture<Integer> publication = clientConnection.publish(msg);
+            publication.get();
         }
 
         // Sleep 3 seconds to see if we receive our payload
@@ -634,7 +652,8 @@ public class AwsIotRecon {
         
         // Unsubscribe from the data exfiltration topic(s)
         for (final String topic : topics) {
-            clientConnection.unsubscribe(topic);
+            CompletableFuture<Integer> unsub = clientConnection.unsubscribe(topic);
+            unsub.get();
         }
     }
 
@@ -741,7 +760,7 @@ public class AwsIotRecon {
 
 
     // https://docs.aws.amazon.com/iot/latest/developerguide/jobs-mqtt-api.html
-    public static void getPendingJobs() {
+    public static void getPendingJobs() throws InterruptedException, ExecutionException {
         final String thingName = cmd.hasOption("t") ? cmd.getOptionValue("t") : clientId;
         final String topic = "$aws/things/" + thingName + "/jobs/get";
         final String topicAccepted = topic + "/accepted";
@@ -749,17 +768,22 @@ public class AwsIotRecon {
         final String message = "{}";
 
 
-        clientConnection.subscribe(topicAccepted, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer).exceptionally((Throwable throwable) -> {
+        CompletableFuture<Integer> subAccept = clientConnection.subscribe(topicAccepted, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer);
+        subAccept.exceptionally((Throwable throwable) -> {
             System.err.println("[ERROR] Failed to process message for " + topicAccepted + ": " + throwable.toString());
             return -1;
         });
-        clientConnection.subscribe(topicRejected, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer).exceptionally((Throwable throwable) -> {
+        subAccept.get();
+        CompletableFuture<Integer> subReject = clientConnection.subscribe(topicRejected, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer);
+        subReject.exceptionally((Throwable throwable) -> {
             System.err.println("[ERROR] Failed to process message for " + topicRejected + ": " + throwable.toString());
             return -1;
         });
+        subReject.get();
 
         MqttMessage msg = new MqttMessage(topic, message.getBytes(StandardCharsets.UTF_8), QualityOfService.AT_LEAST_ONCE);
-        clientConnection.publish(msg);
+        CompletableFuture<Integer> publication = clientConnection.publish(msg);
+        publication.get();
 
         // Sleep 3 seconds to see if we receive our payload
         try {
@@ -769,8 +793,57 @@ public class AwsIotRecon {
         }
         
         // Unsubscribe from the accept/reject topic(s)
-        clientConnection.unsubscribe(topicAccepted);
-        clientConnection.unsubscribe(topicRejected);
+        CompletableFuture<Integer> unsubAccept = clientConnection.unsubscribe(topicAccepted);
+        unsubAccept.get();
+        CompletableFuture<Integer> unsubReject = clientConnection.unsubscribe(topicRejected);
+        unsubReject.get();
+    }
+
+
+    public static void runMqttScript(String scriptFilePath) throws IOException, InterruptedException, ExecutionException {
+        final String tag = "[MQTT Script] ";
+        final int maxLogMsgSize = 80;
+        System.err.println(tag + "Executing script: " + scriptFilePath);
+        List<MqttScript.Instruction> instructions = MqttScript.parseFromFile(scriptFilePath);
+
+        for (int i = 0; i < instructions.size(); i++) {
+            MqttScript.Instruction instr = instructions.get(i);
+
+            if (instr.getOp().equals(MqttScript.Instruction.OP_PUBLISH)) {
+                String logMsg = instr.toString();
+                if (logMsg.length() > maxLogMsgSize) {
+                    logMsg = logMsg.substring(0, maxLogMsgSize) + "...";
+                }
+                System.err.println(tag + logMsg);
+                MqttMessage msg = new MqttMessage(instr.getTopic(), instr.getPayload(), QualityOfService.AT_LEAST_ONCE);
+                CompletableFuture<Integer> publication = clientConnection.publish(msg);
+                publication.get();
+
+            } else if (instr.getOp().equals(MqttScript.Instruction.OP_SUBSCRIBE)) {
+                System.err.println(tag + instr.toString());
+                final String topic = instr.getTopic();
+                CompletableFuture<Integer> subscription = clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer);
+                subscription.exceptionally((Throwable throwable) -> {
+                    System.err.println("[ERROR] Failed to process message for " + topic + ": " + throwable.toString());
+                    return -1;
+                });
+                subscription.get();
+
+            } else if (instr.getOp().equals(MqttScript.Instruction.OP_UNSUBSCRIBE)) {
+                System.err.println(tag + instr.toString());
+                CompletableFuture<Integer> unsub = clientConnection.unsubscribe(instr.getTopic());
+                unsub.get();
+
+            } else if (instr.getOp().equals(MqttScript.Instruction.OP_SLEEP)) {
+                System.err.println(tag + instr.toString());
+                Util.sleep(instr.getDelay());
+
+            } else {
+                System.err.println("[WARNING] Encountered unknown MQTT script instruction: " + instr.getOp());
+            }
+        }
+
+        Util.sleepForever();
     }
 
 }

@@ -8,6 +8,7 @@ package com.seanpesce.aws.iot;
 import com.seanpesce.regex.PatternWithNamedGroups;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 
@@ -18,12 +19,22 @@ public class AwsIotConstants {
     public static final String ACTION_MQTT_DUMP = "mqtt-dump";
     public static final String ACTION_MQTT_TOPIC_FIELD_HARVEST = "mqtt-topic-field-harvest";
     public static final String ACTION_IAM_CREDS = "iam-credentials";
+    public static final String ACTION_MQTT_SCRIPT = "mqtt-script";
     public static final String ACTION_MQTT_DATA_EXFIL = "mqtt-data-exfil";
     public static final String ACTION_GET_SHADOW = "get-device-shadow";
     public static final String ACTION_LIST_NAMED_SHADOWS = "list-named-shadows";
     public static final String ACTION_GET_JOBS = "get-jobs";
     public static final String ACTION_LIST_RETAINED_MQTT_MESSAGES = "list-retained-mqtt-messages";
-    public static final List<String> CLI_ACTIONS = Arrays.asList(new String[]{ACTION_MQTT_DUMP, ACTION_MQTT_TOPIC_FIELD_HARVEST, ACTION_IAM_CREDS, ACTION_MQTT_DATA_EXFIL, ACTION_GET_SHADOW, ACTION_LIST_NAMED_SHADOWS, ACTION_GET_JOBS, ACTION_LIST_RETAINED_MQTT_MESSAGES});
+    public static final List<String> CLI_ACTIONS = Collections.unmodifiableList(Arrays.asList(new String[]{
+        ACTION_MQTT_DUMP,
+        ACTION_MQTT_TOPIC_FIELD_HARVEST,
+        ACTION_IAM_CREDS, ACTION_MQTT_SCRIPT,
+        ACTION_MQTT_DATA_EXFIL,
+        ACTION_GET_SHADOW,
+        ACTION_LIST_NAMED_SHADOWS,
+        ACTION_GET_JOBS,
+        ACTION_LIST_RETAINED_MQTT_MESSAGES
+    }));
     public static final String CLI_AUTH_ARG = "(Auth option) ";
     
     public static final short AWS_IOT_REST_API_PORT = 8443;
