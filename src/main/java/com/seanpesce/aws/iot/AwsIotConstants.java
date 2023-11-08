@@ -13,7 +13,7 @@ import java.util.List;
 
 public class AwsIotConstants {
 
-    public static final String PROJECT_TITLE = "[AWS IoT Core Data Plane Enumeration Tool by Sean Pesce]";
+    public static final String PROJECT_TITLE = "[AWS IoT Core Enumeration Tool by Sean Pesce]";
 
     public static final String ACTION_MQTT_DUMP = "mqtt-dump";
     public static final String ACTION_MQTT_TOPIC_FIELD_HARVEST = "mqtt-topic-field-harvest";
@@ -21,14 +21,30 @@ public class AwsIotConstants {
     public static final String ACTION_MQTT_DATA_EXFIL = "mqtt-data-exfil";
     public static final String ACTION_GET_SHADOW = "get-device-shadow";
     public static final String ACTION_LIST_NAMED_SHADOWS = "list-named-shadows";
+    public static final String ACTION_GET_JOBS = "get-jobs";
     public static final String ACTION_LIST_RETAINED_MQTT_MESSAGES = "list-retained-mqtt-messages";
-    public static final List<String> CLI_ACTIONS = Arrays.asList(new String[]{ACTION_MQTT_DUMP, ACTION_MQTT_TOPIC_FIELD_HARVEST, ACTION_IAM_CREDS, ACTION_MQTT_DATA_EXFIL, ACTION_GET_SHADOW, ACTION_LIST_NAMED_SHADOWS, ACTION_LIST_RETAINED_MQTT_MESSAGES});
+    public static final List<String> CLI_ACTIONS = Arrays.asList(new String[]{ACTION_MQTT_DUMP, ACTION_MQTT_TOPIC_FIELD_HARVEST, ACTION_IAM_CREDS, ACTION_MQTT_DATA_EXFIL, ACTION_GET_SHADOW, ACTION_LIST_NAMED_SHADOWS, ACTION_GET_JOBS, ACTION_LIST_RETAINED_MQTT_MESSAGES});
     public static final String CLI_AUTH_ARG = "(Auth option) ";
     
     public static final short AWS_IOT_REST_API_PORT = 8443;
     public static final String MQTT_ALL_TOPICS = "#";
     public static final String MQTT_RESERVED_TOPIC_PREFIX = "$aws";
     public static final String MQTT_PING_TOPIC = "mqtt_ping";
+
+    // Used by the test implementation in the initial "device connection kit." These might be left
+    // over from initial setup.
+    // @TODO: Make some tests involving these topics/client IDs?
+    public static final String[] SETUP_TEST_SDK_MQTT_TOPICS = {
+        "sdk/test/java",
+        "sdk/test/python",
+        "sdk/test/js",
+    };
+    public static final String[] SETUP_TEST_SDK_CLIENT_IDS = {
+        "sdk-java",
+        "basicPubSub",
+        "sdk-nodejs-test",  // sdk-nodejs-*
+        ("sdk-nodejs-"+System.currentTimeMillis())  // sdk-nodejs-*
+    };
 
 
     // https://docs.aws.amazon.com/iot/latest/developerguide/reserved-topics.html

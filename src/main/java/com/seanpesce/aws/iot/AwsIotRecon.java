@@ -13,31 +13,25 @@
 package com.seanpesce.aws.iot;
 
 
-import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.FileSystems;
-import java.nio.file.Paths;
 import java.security.cert.CertificateException;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
-import java.text.ParseException;
 import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import com.seanpesce.aws.iot.AwsIotConstants;
 import com.seanpesce.http.MtlsHttpClient;
@@ -54,28 +48,15 @@ import org.apache.commons.cli.Options;
 import software.amazon.awssdk.crt.auth.credentials.Credentials;
 import software.amazon.awssdk.crt.auth.credentials.X509CredentialsProvider;
 import software.amazon.awssdk.crt.CRT;
-import software.amazon.awssdk.crt.CrtResource;
-import software.amazon.awssdk.crt.io.TlsContext;
+import software.amazon.awssdk.crt.io.ClientTlsContext;
 import software.amazon.awssdk.crt.io.TlsContextOptions;
 import software.amazon.awssdk.crt.mqtt.MqttClientConnection;
 import software.amazon.awssdk.crt.mqtt.MqttClientConnectionEvents;
 import software.amazon.awssdk.crt.mqtt.MqttMessage;
 import software.amazon.awssdk.crt.mqtt.QualityOfService;
+import software.amazon.awssdk.crt.mqtt5.Mqtt5Client;
 import software.amazon.awssdk.iot.AwsIotMqttConnectionBuilder;
-import software.amazon.awssdk.iot.iotshadow.IotShadowClient;
-import software.amazon.awssdk.iot.iotshadow.model.ErrorResponse;
-import software.amazon.awssdk.iot.iotshadow.model.GetShadowResponse;
-import software.amazon.awssdk.iot.iotshadow.model.GetShadowRequest;
-import software.amazon.awssdk.iot.iotshadow.model.GetShadowSubscriptionRequest;
-import software.amazon.awssdk.iot.iotshadow.model.ShadowDeltaUpdatedEvent;
-import software.amazon.awssdk.iot.iotshadow.model.ShadowDeltaUpdatedSubscriptionRequest;
-import software.amazon.awssdk.iot.iotshadow.model.ShadowState;
-import software.amazon.awssdk.iot.iotshadow.model.UpdateShadowRequest;
-import software.amazon.awssdk.iot.iotshadow.model.UpdateShadowResponse;
-import software.amazon.awssdk.iot.iotshadow.model.UpdateShadowSubscriptionRequest;
 // import software.amazon.awssdk.services.iotdataplane.IotDataPlaneClient;
-
-import com.google.gson.Gson;
 
 
 public class AwsIotRecon {
@@ -92,8 +73,8 @@ public class AwsIotRecon {
     public static CommandLine cmd = null;
     public static String clientId = null;
     public static MqttClientConnection clientConnection = null;
-    public static IotShadowClient shadowClient = null;
-    public static TlsContext tlsContext = null;  // For assuming IAM roles
+    public static Mqtt5Client mqtt5ClientConnection = null;
+    public static ClientTlsContext tlsContext = null;  // For assuming IAM roles
 
     
     public static final MqttClientConnectionEvents connectionCallbacks = new MqttClientConnectionEvents() {
@@ -136,8 +117,6 @@ public class AwsIotRecon {
         cmd = parseCommandLineArguments(args);
         buildConnection(cmd);
 
-        shadowClient = new IotShadowClient(clientConnection);
-
         String action = cmd.getOptionValue("a");
         if (action.equals(AwsIotConstants.ACTION_MQTT_DUMP)) {
             mqttConnect();
@@ -153,6 +132,10 @@ public class AwsIotRecon {
         } else if (action.equals(AwsIotConstants.ACTION_MQTT_DATA_EXFIL)) {
             mqttConnect();
             testDataExfilChannel();
+        
+        } else if (action.equals(AwsIotConstants.ACTION_GET_JOBS)) {
+            mqttConnect();
+            getPendingJobs();
 
         } else if (action.equals(AwsIotConstants.ACTION_GET_SHADOW)) {
             getDeviceShadow(cmd.hasOption("t") ? cmd.getOptionValue("t") : clientId, cmd.hasOption("s") ? cmd.getOptionValue("s") : null);
@@ -203,7 +186,7 @@ public class AwsIotRecon {
         opts.addOption(optMtlsKeystoreAlias);
         Option optMtlsKeystoreCertPw = Option.builder("Q").longOpt("keystore-cert-pass").argName("password").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Certificate password for mTLS keystore (JKS)").type(String.class).build();
         opts.addOption(optMtlsKeystoreCertPw);
-        Option optMtlsWindowsCertPath = Option.builder("W").longOpt("windows-cert-store").argName("path").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Path to mTLS certificate in a Windows certificate store").type(String.class).build();
+        Option optMtlsWindowsCertPath = Option.builder(null).longOpt("windows-cert-store").argName("path").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Path to mTLS certificate in a Windows certificate store").type(String.class).build();
         opts.addOption(optMtlsWindowsCertPath);
         Option optCertificateAuthority = Option.builder("A").longOpt("cert-authority").argName("cert").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Certificate authority (CA) to use for verifying the server TLS certificate (file path or string data)").type(String.class).build();
         opts.addOption(optCertificateAuthority);
@@ -225,12 +208,25 @@ public class AwsIotRecon {
         opts.addOption(optThingName);
         Option optShadowName = Option.builder("s").longOpt("shadow-name").argName("name").hasArg(true).required(false).desc("Shadow name (required for fetching named shadows with " + AwsIotConstants.ACTION_GET_SHADOW + ")").type(String.class).build();
         opts.addOption(optShadowName);
+        Option optCustomAuthUser = Option.builder(null).longOpt("custom-auth-user").argName("user").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer username").type(String.class).build();
+        opts.addOption(optCustomAuthUser);
+        Option optCustomAuthName = Option.builder(null).longOpt("custom-auth-name").argName("name").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer name").type(String.class).build();
+        opts.addOption(optCustomAuthName);
+        Option optCustomAuthSig = Option.builder(null).longOpt("custom-auth-sig").argName("signature").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer signature").type(String.class).build();
+        opts.addOption(optCustomAuthSig);
+        Option optCustomAuthPass = Option.builder(null).longOpt("custom-auth-pass").argName("password").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer password").type(String.class).build();
+        opts.addOption(optCustomAuthPass);
+        Option optCustomAuthTokKey = Option.builder(null).longOpt("custom-auth-tok-name").argName("name").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer token key name").type(String.class).build();
+        opts.addOption(optCustomAuthTokKey);
+        Option optCustomAuthTokVal = Option.builder(null).longOpt("custom-auth-tok-val").argName("value").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "Custom authorizer token value").type(String.class).build();
+        opts.addOption(optCustomAuthTokVal);
         // Option optAwsRegion = Option.builder("r").longOpt("region").argName("region").hasArg(true).required(false).desc("AWS instance region (e.g., \"us-west-2\")").type(String.class).build();
         // opts.addOption(optAwsRegion);
 
         // @TODO: Add support for these:
         //        Connection options:
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withCustomAuthorizer(java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String,java.lang.String)
+        //            See also: https://github.com/aws/aws-iot-device-sdk-java-v2/blob/main/samples/CustomAuthorizerConnect/src/main/java/customauthorizerconnect/CustomAuthorizerConnect.java#L70
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withHttpProxyOptions(software.amazon.awssdk.crt.http.HttpProxyOptions)
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqtt5ClientBuilder.html
         //
@@ -337,6 +333,12 @@ public class AwsIotRecon {
 
         } else if (action.equals(AwsIotConstants.ACTION_MQTT_DATA_EXFIL)) {
             // Nothing required except auth data
+        
+        } else if (action.equals(AwsIotConstants.ACTION_GET_JOBS)) {
+            if (!(cmd.hasOption("t") || cmd.hasOption("C"))) {
+                System.err.println("[ERROR] \"" + action + "\" action requires thing name (\"-t\") or client ID (\"-C\")");
+                System.exit(3);
+            }
 
         } else if (action.equals(AwsIotConstants.ACTION_GET_SHADOW)) {
             // @TODO: Improve implementation to support this action in more ways
@@ -411,9 +413,24 @@ public class AwsIotRecon {
             String winStorePath = cmd.getOptionValue("W");
             connBuilder = AwsIotMqttConnectionBuilder.newMtlsWindowsCertStorePathBuilder(winStorePath);
             tlsCtxOpts = TlsContextOptions.createWithMtlsWindowsCertStorePath​(winStorePath);
+        
+        } else if (cmd.hasOption("custom-auth-name") || cmd.hasOption("custom-auth-sig")
+                    || cmd.hasOption("custom-auth-tok-name") || cmd.hasOption("custom-auth-tok-val")
+                    || cmd.hasOption("custom-auth-user") || cmd.hasOption("custom-auth-pass")) {
+            // Custom authentication
+            connBuilder = AwsIotMqttConnectionBuilder.newDefaultBuilder();
+            connBuilder = connBuilder.withCustomAuthorizer(
+                cmd.getOptionValue("custom-auth-user"),
+                cmd.getOptionValue("custom-auth-name"),
+                cmd.getOptionValue("custom-auth-sig"),  // @TODO: "It is strongly suggested to URL-encode this value; the SDK will not do so for you."
+                cmd.getOptionValue("custom-auth-pass"),
+                cmd.getOptionValue("custom-auth-tok-name"),  // @TODO: "It is strongly suggested to URL-encode this value; the SDK will not do so for you."
+                cmd.getOptionValue("custom-auth-tok-val")
+            );
+            tlsCtxOpts = TlsContextOptions.createDefaultClient();
 
         } else {
-            System.err.println("[ERROR] Missing connection properties (must provide some combination of \"-c\", \"-k\", \"-K\", \"-q\", \"-A\", \"-Q\", \"-W\", etc.)");
+            System.err.println("[ERROR] Missing connection properties (must provide some combination of \"-c\", \"-k\", \"-K\", \"-q\", \"-A\", \"-Q\", \"--custom-auth-*\", etc.)");
             System.exit(1);
         }
 
@@ -458,14 +475,13 @@ public class AwsIotRecon {
         // }
 
 
-        // Build and connect
-
-        tlsContext = new TlsContext(tlsCtxOpts);
+        // Build
+        tlsContext = new ClientTlsContext(tlsCtxOpts);
 
         if (cmd.hasOption("5")) {
             // @TODO
             throw new UnsupportedOperationException("MQTT5 connections not supported yet");
-            //clientConnection = connBuilder.toAwsIotMqtt5ClientBuilder().build();
+            //mqtt5ClientConnection = connBuilder.toAwsIotMqtt5ClientBuilder().build();
         } else {
             clientConnection = connBuilder.build();
         }
@@ -475,13 +491,17 @@ public class AwsIotRecon {
 
     public static void mqttConnect() {
         System.err.println("[INFO] Connecting to " + cmd.getOptionValue("H"));
-        CompletableFuture<Boolean> isCleanConnFuture = clientConnection.connect();
-        try {
-            Boolean isCleanSession = isCleanConnFuture.get();
-            // System.err.println("[INFO] Clean session? " + isCleanSession.toString());
-        } catch (ExecutionException | InterruptedException e) {
-            System.err.println("[ERROR] Exception connecting: " + e.toString());
-            System.exit(2);
+        if (mqtt5ClientConnection != null) {
+            mqtt5ClientConnection.start();
+        } else {
+            CompletableFuture<Boolean> isCleanConnFuture = clientConnection.connect();
+            try {
+                Boolean isCleanSession = isCleanConnFuture.get();
+                // System.err.println("[INFO] Clean session? " + isCleanSession.toString());
+            } catch (ExecutionException | InterruptedException e) {
+                System.err.println("[ERROR] Exception connecting: " + e.toString());
+                System.exit(2);
+            }
         }
     }
 
@@ -569,65 +589,98 @@ public class AwsIotRecon {
 
     // Test whether the AWS IoT service can be used for data exfiltration via arbitrary topics
     public static void testDataExfilChannel() {
-        final String timeStamp = "" + System.currentTimeMillis();
-        // @TODO: Support user-provided topics
-        final String testTopic = timeStamp;
+        final String timestamp = "" + System.currentTimeMillis();
+
+        ArrayList<String> topics = new ArrayList<String>();
+        if (topicSubcriptions.isEmpty()) {
+            // By default, use the current epoch timestamp for a unique MQTT topic
+            topics.add(timestamp);
+        } else {
+            topics.addAll(topicSubcriptions);
+        }
 
         final Consumer<MqttMessage> dataExfilConsumer = new Consumer<MqttMessage>() {
             @Override
             public void accept(MqttMessage message) {
                 final String payloadStr = new String(message.getPayload(), StandardCharsets.UTF_8).trim();
                 String msg = null;
-                if (payloadStr.equals(timeStamp)) {
-                    msg = "\n[Data exfiltration] Confirmed data exfiltration channel via topic: " + message.getTopic();
+                if (payloadStr.equals(timestamp)) {
+                    System.out.println("\n[Data exfiltration] Confirmed data exfiltration channel via topic: " + message.getTopic());
                 } else {
-                    msg = "\n[Data exfiltration] Unknown data received via data exfiltration channel (topic: " + message.getTopic() + "): " + payloadStr;
+                    System.err.println("[WARNING] Unknown data received via data exfiltration channel (topic: " + message.getTopic() + "): " + payloadStr);
                 }
-                System.out.println(msg);
             }
         };
         
-        // Subscribe to the data exfiltration topic
-        System.err.println("[INFO] Testing data exfiltration via arbitrary topics (using topic: \"" + testTopic + "\")");
-        clientConnection.subscribe(testTopic, QualityOfService.AT_LEAST_ONCE, dataExfilConsumer).exceptionally((Throwable throwable) -> {
-            System.err.println("[ERROR] Failed to process message for " + testTopic + ": " + throwable.toString());
-            return -1;
-        });
+        // Subscribe to the data exfiltration topic(s)
+        for (final String topic : topics) {
+            System.err.println("[INFO] Testing data exfiltration via arbitrary topics (using topic: \"" + topic + "\")");
+            clientConnection.subscribe(topic, QualityOfService.AT_LEAST_ONCE, dataExfilConsumer).exceptionally((Throwable throwable) -> {
+                System.err.println("[ERROR] Failed to process message for " + topic + ": " + throwable.toString());
+                return -1;
+            });
 
-        // Publish data to the data exfiltration topic
-        MqttMessage msg = new MqttMessage(testTopic, timeStamp.getBytes(StandardCharsets.UTF_8), QualityOfService.AT_LEAST_ONCE);
-        clientConnection.publish(msg);
+            // Publish data to the data exfiltration topic
+            MqttMessage msg = new MqttMessage(topic, timestamp.getBytes(StandardCharsets.UTF_8), QualityOfService.AT_LEAST_ONCE);
+            clientConnection.publish(msg);
+        }
 
-        // Sleep 5 seconds to see if we receive our payload
+        // Sleep 3 seconds to see if we receive our payload
         try {
-            Thread.sleep(5000);
+            Thread.sleep(3000);
         } catch (InterruptedException ex) {
             System.err.println("[WARNING] Data exfiltration sleep operation was interrupted: " + ex.getMessage());
         }
         
-        clientConnection.unsubscribe(testTopic);
+        // Unsubscribe from the data exfiltration topic(s)
+        for (final String topic : topics) {
+            clientConnection.unsubscribe(topic);
+        }
     }
 
 
     // Attempts to obtain IAM credentials for the specified role using the client mTLS key pair from an IoT "Thing" (device)
+    //
+    // Note that the iot:CredentialProvider is a different host/endpoint than the base IoT endpoint
+    //
+    // @TODO: Add support for multiple roles at once
     public static Credentials getIamCredentialsFromDeviceX509(String roleAlias, String thingName) {
         // See also:
         //   https://github.com/aws/aws-iot-device-sdk-java-v2/blob/de4e5f3be56c325975674d4e3c0a801392edad96/samples/X509CredentialsProviderConnect/src/main/java/x509credentialsproviderconnect/X509CredentialsProviderConnect.java#L99
         //   https://awslabs.github.io/aws-crt-java/software/amazon/awssdk/crt/auth/credentials/X509CredentialsProvider.html
+        //   https://aws.amazon.com/blogs/security/how-to-eliminate-the-need-for-hardcoded-aws-credentials-in-devices-by-using-the-aws-iot-credentials-provider/
+
+        final String endpoint = cmd.getOptionValue("H");
+        if (!endpoint.contains("credentials.iot")) {
+            System.err.println("[WARNING] Endpoint \"" + endpoint + "\" might not be an AWS IoT credentials provider; are you sure you have the right hostname? (Expected format: \"${random_id}.credentials.iot.${region}.amazonaws.com\")");
+        }
+
+        // // mTLS HTTP client method:
+        // String url = "https://" + endpoint + "/role-aliases/" + roleAlias + "/credentials";
+        // String data = MtlsHttpClient.mtlsHttpGet(url, cmd.getOptionValue("c"), cmd.getOptionValue("k"), cmd.getOptionValue("A"), true);
+        // // Need to add header "x-amzn-iot-thingname: " + thingName
+        // System.out.println(data);
+        // return null;
+
         Credentials credentials = null;
         X509CredentialsProvider.X509CredentialsProviderBuilder x509CredsBuilder = new X509CredentialsProvider.X509CredentialsProviderBuilder();
         x509CredsBuilder = x509CredsBuilder.withTlsContext(tlsContext);
-        x509CredsBuilder = x509CredsBuilder.withEndpoint​(cmd.getOptionValue("H"));
+        x509CredsBuilder = x509CredsBuilder.withEndpoint​(endpoint);
         x509CredsBuilder = x509CredsBuilder.withRoleAlias(roleAlias);
         x509CredsBuilder = x509CredsBuilder.withThingName(thingName);
         X509CredentialsProvider credsProvider = x509CredsBuilder.build();
         CompletableFuture<Credentials> credsFuture = credsProvider.getCredentials();
         try {
             credentials = credsFuture.get();
-            System.out.println("[Credentials] " + credentials);
+            String credsStr = "{\"credentials\":{\"accessKeyId\":\"" + new String(credentials.getAccessKeyId(), StandardCharsets.UTF_8) + "\"";
+            credsStr += ",\"secretAccessKey\":\"" + new String(credentials.getSecretAccessKey(), StandardCharsets.UTF_8) + "\"";
+            credsStr += ",\"sessionToken\":\"" + new String(credentials.getSessionToken(), StandardCharsets.UTF_8) + "\"}}";
+            System.out.println(credsStr);
         } catch (ExecutionException | InterruptedException  ex) {
             System.err.println("[ERROR] Failed to obtain credentials from X509 (role=\"" + roleAlias + "\"; thingName=\"" + thingName + "\"): " + ex.getMessage());
         }
+        
+        credsProvider.close();
         return credentials;
     }
 
@@ -684,6 +737,40 @@ public class AwsIotRecon {
         // @TODO: Iterate through all pages of retained messages
         // @TODO: Get message bodies for all retained message topics
         System.out.println(data);
+    }
+
+
+    // https://docs.aws.amazon.com/iot/latest/developerguide/jobs-mqtt-api.html
+    public static void getPendingJobs() {
+        final String thingName = cmd.hasOption("t") ? cmd.getOptionValue("t") : clientId;
+        final String topic = "$aws/things/" + thingName + "/jobs/get";
+        final String topicAccepted = topic + "/accepted";
+        final String topicRejected = topic + "/rejected";
+        final String message = "{}";
+
+
+        clientConnection.subscribe(topicAccepted, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer).exceptionally((Throwable throwable) -> {
+            System.err.println("[ERROR] Failed to process message for " + topicAccepted + ": " + throwable.toString());
+            return -1;
+        });
+        clientConnection.subscribe(topicRejected, QualityOfService.AT_LEAST_ONCE, genericMqttMsgConsumer).exceptionally((Throwable throwable) -> {
+            System.err.println("[ERROR] Failed to process message for " + topicRejected + ": " + throwable.toString());
+            return -1;
+        });
+
+        MqttMessage msg = new MqttMessage(topic, message.getBytes(StandardCharsets.UTF_8), QualityOfService.AT_LEAST_ONCE);
+        clientConnection.publish(msg);
+
+        // Sleep 3 seconds to see if we receive our payload
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException ex) {
+            System.err.println("[WARNING] Get pending jobs sleep operation was interrupted: " + ex.getMessage());
+        }
+        
+        // Unsubscribe from the accept/reject topic(s)
+        clientConnection.unsubscribe(topicAccepted);
+        clientConnection.unsubscribe(topicRejected);
     }
 
 }
