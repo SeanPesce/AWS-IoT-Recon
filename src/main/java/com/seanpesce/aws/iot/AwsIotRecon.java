@@ -128,7 +128,7 @@ public class AwsIotRecon {
             beginMqttTopicFieldHarvesting();
 
         } else if (action.equals(AwsIotConstants.ACTION_IAM_CREDS)) {
-            getIamCredentialsFromDeviceX509(cmd.hasOption("R") ? cmd.getOptionValue("R") : "admin", cmd.hasOption("t") ? cmd.getOptionValue("t") : clientId);
+            getIamCredentialsFromDeviceX509(cmd.hasOption("R") ? Util.getTextFileDataFromOptionalPath(cmd.getOptionValue("R")).split("\n") : new String[] {"admin"}, cmd.hasOption("t") ? cmd.getOptionValue("t") : clientId);
 
         } else if (action.equals(AwsIotConstants.ACTION_MQTT_SCRIPT)) {
             mqttConnect();
@@ -203,7 +203,7 @@ public class AwsIotRecon {
         opts.addOption(optTopicRegex);
         Option optNoVerifyTls = new Option("U", "unsafe-tls", false, "Disable TLS certificate validation when possible");  // @TODO: Disable TLS validation for MQTT too?
         opts.addOption(optNoVerifyTls);
-        Option optRoleAlias = Option.builder("R").longOpt("role-alias").argName("role").hasArg(true).required(false).desc("IAM role alias to obtain credentials for").type(String.class).build();
+        Option optRoleAlias = Option.builder("R").longOpt("role-alias").argName("role").hasArg(true).required(false).desc("IAM role alias to obtain credentials for. Accepts a single alias string, or a path to a file containing a list of aliases.").type(String.class).build();
         opts.addOption(optRoleAlias);
         Option optSubToTopics = Option.builder("T").longOpt("topics").argName("topics").hasArg(true).required(false).desc("MQTT topics to subscribe to (file path or string data). To provide multiple topics, separate each topic with a newline character").type(String.class).build();
         opts.addOption(optSubToTopics);
@@ -332,7 +332,7 @@ public class AwsIotRecon {
 
         } else if (action.equals(AwsIotConstants.ACTION_IAM_CREDS)) {
             if (!cmd.hasOption("R")) {
-                throw new IllegalArgumentException("Operation " + action + " requires a role to be specified with \"-R\"");
+                throw new IllegalArgumentException("Operation " + action + " requires role(s) to be specified with \"-R\"");
             }
 
         } else if (action.equals(AwsIotConstants.ACTION_MQTT_SCRIPT)) {
@@ -660,10 +660,11 @@ public class AwsIotRecon {
 
     // Attempts to obtain IAM credentials for the specified role using the client mTLS key pair from an IoT "Thing" (device)
     //
-    // Note that the iot:CredentialProvider is a different host/endpoint than the base IoT endpoint
+    // Note that the iot:CredentialProvider is a different host/endpoint than the base IoT endpoint; it should have the format:
+    // ${random_id}.credentials.iot.${region}.amazonaws.com
     //
-    // @TODO: Add support for multiple roles at once
-    public static Credentials getIamCredentialsFromDeviceX509(String roleAlias, String thingName) {
+    // (The random_id will also be different from the one in the base IoT Core endpoint)
+    public static List<Credentials> getIamCredentialsFromDeviceX509(String[] roleAliases, String thingName) {
         // See also:
         //   https://github.com/aws/aws-iot-device-sdk-java-v2/blob/de4e5f3be56c325975674d4e3c0a801392edad96/samples/X509CredentialsProviderConnect/src/main/java/x509credentialsproviderconnect/X509CredentialsProviderConnect.java#L99
         //   https://awslabs.github.io/aws-crt-java/software/amazon/awssdk/crt/auth/credentials/X509CredentialsProvider.html
@@ -674,33 +675,39 @@ public class AwsIotRecon {
             System.err.println("[WARNING] Endpoint \"" + endpoint + "\" might not be an AWS IoT credentials provider; are you sure you have the right hostname? (Expected format: \"${random_id}.credentials.iot.${region}.amazonaws.com\")");
         }
 
-        // // mTLS HTTP client method:
-        // String url = "https://" + endpoint + "/role-aliases/" + roleAlias + "/credentials";
-        // String data = MtlsHttpClient.mtlsHttpGet(url, cmd.getOptionValue("c"), cmd.getOptionValue("k"), cmd.getOptionValue("A"), true);
-        // // Need to add header "x-amzn-iot-thingname: " + thingName
-        // System.out.println(data);
-        // return null;
+        ArrayList<Credentials> discoveredCreds = new ArrayList<Credentials>();
 
-        Credentials credentials = null;
-        X509CredentialsProvider.X509CredentialsProviderBuilder x509CredsBuilder = new X509CredentialsProvider.X509CredentialsProviderBuilder();
-        x509CredsBuilder = x509CredsBuilder.withTlsContext(tlsContext);
-        x509CredsBuilder = x509CredsBuilder.withEndpoint​(endpoint);
-        x509CredsBuilder = x509CredsBuilder.withRoleAlias(roleAlias);
-        x509CredsBuilder = x509CredsBuilder.withThingName(thingName);
-        X509CredentialsProvider credsProvider = x509CredsBuilder.build();
-        CompletableFuture<Credentials> credsFuture = credsProvider.getCredentials();
-        try {
-            credentials = credsFuture.get();
-            String credsStr = "{\"credentials\":{\"accessKeyId\":\"" + new String(credentials.getAccessKeyId(), StandardCharsets.UTF_8) + "\"";
-            credsStr += ",\"secretAccessKey\":\"" + new String(credentials.getSecretAccessKey(), StandardCharsets.UTF_8) + "\"";
-            credsStr += ",\"sessionToken\":\"" + new String(credentials.getSessionToken(), StandardCharsets.UTF_8) + "\"}}";
-            System.out.println(credsStr);
-        } catch (ExecutionException | InterruptedException  ex) {
-            System.err.println("[ERROR] Failed to obtain credentials from X509 (role=\"" + roleAlias + "\"; thingName=\"" + thingName + "\"): " + ex.getMessage());
+        for (String roleAlias : roleAliases) {
+            // // mTLS HTTP client method:
+            // String url = "https://" + endpoint + "/role-aliases/" + roleAlias + "/credentials";
+            // String data = MtlsHttpClient.mtlsHttpGet(url, cmd.getOptionValue("c"), cmd.getOptionValue("k"), cmd.getOptionValue("A"), true);
+            // // Need to add header "x-amzn-iot-thingname: " + thingName
+            // System.out.println(data);
+            // return null;
+
+            Credentials credentials = null;
+            X509CredentialsProvider.X509CredentialsProviderBuilder x509CredsBuilder = new X509CredentialsProvider.X509CredentialsProviderBuilder();
+            x509CredsBuilder = x509CredsBuilder.withTlsContext(tlsContext);
+            x509CredsBuilder = x509CredsBuilder.withEndpoint​(endpoint);
+            x509CredsBuilder = x509CredsBuilder.withRoleAlias(roleAlias);
+            x509CredsBuilder = x509CredsBuilder.withThingName(thingName);
+            X509CredentialsProvider credsProvider = x509CredsBuilder.build();
+            CompletableFuture<Credentials> credsFuture = credsProvider.getCredentials();
+            try {
+                credentials = credsFuture.get();
+                String credsStr = "{\"credentials\":{\"accessKeyId\":\"" + new String(credentials.getAccessKeyId(), StandardCharsets.UTF_8) + "\"";
+                credsStr += ",\"secretAccessKey\":\"" + new String(credentials.getSecretAccessKey(), StandardCharsets.UTF_8) + "\"";
+                credsStr += ",\"sessionToken\":\"" + new String(credentials.getSessionToken(), StandardCharsets.UTF_8) + "\"}}";
+                System.out.println(credsStr);
+                discoveredCreds.add(credentials);
+            } catch (ExecutionException | InterruptedException  ex) {
+                System.err.println("[ERROR] Failed to obtain credentials from X509 (role=\"" + roleAlias + "\"; thingName=\"" + thingName + "\"): " + ex.getMessage());
+            }
+            
+            credsProvider.close();
         }
-        
-        credsProvider.close();
-        return credentials;
+
+        return discoveredCreds;
     }
 
 
