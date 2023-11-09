@@ -12,4 +12,4 @@ java -jar aws-iot-recon.jar -a mqtt-script -H $AWS_ENDPOINT -f samples/mqtt-scri
 
 Note that the file payload test will cause a `FileNotFound` exception if this test is not executed from the project root directory.  
 
-For more information about MQTT scripting syntax, check out the [MQTT scripting documentation](../../docs/MQTT_Scripting.md)  
+For more information about MQTT scripting syntax, check out the [MQTT scripting documentation](../../docs/MQTT_Scripting.md).  
