@@ -20,7 +20,7 @@ java -jar aws-iot-recon.jar -H <host> -a <action> [options]
 
 See also:  
 
- * [MQTT scripting documentation](docs/MQTT_Scripting.md).  
+ * [MQTT scripting documentation](docs/MQTT_Scripting.md)  
 
 
 ## Disclaimer  
