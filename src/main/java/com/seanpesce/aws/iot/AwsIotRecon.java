@@ -47,6 +47,7 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 
 import software.amazon.awssdk.crt.auth.credentials.Credentials;
+import software.amazon.awssdk.crt.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.crt.auth.credentials.X509CredentialsProvider;
 import software.amazon.awssdk.crt.CRT;
 import software.amazon.awssdk.crt.io.ClientTlsContext;
@@ -57,7 +58,18 @@ import software.amazon.awssdk.crt.mqtt.MqttMessage;
 import software.amazon.awssdk.crt.mqtt.QualityOfService;
 import software.amazon.awssdk.crt.mqtt5.Mqtt5Client;
 import software.amazon.awssdk.iot.AwsIotMqttConnectionBuilder;
+import software.amazon.awssdk.regions.Region;
 // import software.amazon.awssdk.services.iotdataplane.IotDataPlaneClient;
+import software.amazon.awssdk.services.cognitoidentity.CognitoIdentityClient;
+import software.amazon.awssdk.services.cognitoidentity.model.GetCredentialsForIdentityRequest;
+import software.amazon.awssdk.services.cognitoidentity.model.GetCredentialsForIdentityResponse;
+import software.amazon.awssdk.services.cognitoidentity.model.GetIdRequest;
+import software.amazon.awssdk.services.cognitoidentity.model.GetIdResponse;
+import software.amazon.awssdk.services.cognitoidentityprovider.CognitoIdentityProviderClient;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AuthenticationResultType;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.AuthFlowType;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.InitiateAuthRequest;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.InitiateAuthResponse;
 
 
 public class AwsIotRecon {
@@ -225,8 +237,28 @@ public class AwsIotRecon {
         opts.addOption(optCustomAuthTokVal);
         Option optMqttScript = Option.builder("f").longOpt("script").argName("file").hasArg(true).required(false).desc("MQTT script file (required for " + AwsIotConstants.ACTION_MQTT_SCRIPT + " action)").type(String.class).build();
         opts.addOption(optMqttScript);
-        // Option optAwsRegion = Option.builder("r").longOpt("region").argName("region").hasArg(true).required(false).desc("AWS instance region (e.g., \"us-west-2\")").type(String.class).build();
-        // opts.addOption(optAwsRegion);
+        Option optAwsRegion = Option.builder("r").longOpt("region").argName("region").hasArg(true).required(false).desc("AWS instance region (e.g., \"us-west-2\") - only required when using MQTT-over-WebSocket").type(String.class).build();
+        opts.addOption(optAwsRegion);
+
+        // https://gist.github.com/SeanPesce/017773ff5cb919364de3f55f6ff086e2
+        Option optAwsAccessKeyId = Option.builder(null).longOpt("aws-access-key-id").argName("id").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS AccessKeyId (for WebSocket auth)").type(String.class).build();
+        opts.addOption(optAwsAccessKeyId);
+        Option optAwsSecretKey = Option.builder(null).longOpt("aws-secret-key").argName("id").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS secret key (for WebSocket auth)").type(String.class).build();
+        opts.addOption(optAwsSecretKey);
+        Option optAwsSessionToken = Option.builder(null).longOpt("aws-session-token").argName("token").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS session token (for WebSocket auth)").type(String.class).build();
+        opts.addOption(optAwsSessionToken);
+
+        // @TODO: Implement Cognito authentication flows
+        // AWS Cognito options
+        // https://docs.aws.amazon.com/AWSJavaSDK/latest/javadoc/com/amazonaws/services/cognitoidp/model/AuthFlowType.html
+        // Option optCognitoAuthFlow = Option.builder(null).longOpt("cognito-auth-flow").argName("flow-type").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS Cognito auth flow type (for Signature v4 auth)").type(String.class).build();
+        // opts.addOption(optCognitoAuthFlow);
+        // Option optCognitoClientId = Option.builder(null).longOpt("cognito-client-id").argName("id").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS Cognito client ID (for Signature v4 auth)").type(String.class).build();
+        // opts.addOption(optCognitoClientId);
+        // Option optCognitoUserPoolId = Option.builder(null).longOpt("cognito-user-pool-id").argName("id").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS Cognito user pool ID (for Signature v4 auth)").type(String.class).build();
+        // opts.addOption(optCognitoUserPoolId);
+        // Option optCognitoIdentityPoolId = Option.builder(null).longOpt("cognito-identity-pool-id").argName("id").hasArg(true).required(false).desc(AwsIotConstants.CLI_AUTH_ARG + "AWS Cognito identity pool ID (for Signature v4 auth)").type(String.class).build();
+        // opts.addOption(optCognitoIdentityPoolId);
 
         // @TODO: Add support for these:
         //        Connection options:
@@ -241,10 +273,10 @@ public class AwsIotRecon {
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withProtocolOperationTimeoutMs(int)
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withReconnectTimeoutSecs(long,long)
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withTimeoutMs(int)
-        //        
-        //        Websocket options:
-        // Option optUseWebsocket = new Option("w", "websocket", false, "Use Websockets");
-        // opts.addOption(optUseWebsocket);
+               
+        // Websocket options:
+        Option optUseWebsocket = new Option("w", "websocket", false, "Use Websockets");
+        opts.addOption(optUseWebsocket);
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withWebsocketCredentialsProvider(software.amazon.awssdk.crt.auth.credentials.CredentialsProvider)
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withWebsocketSigningRegion(java.lang.String)
         //        https://aws.github.io/aws-iot-device-sdk-java-v2/software/amazon/awssdk/iot/AwsIotMqttConnectionBuilder.html#withWebsocketProxyOptions(software.amazon.awssdk.crt.http.HttpProxyOptions)
@@ -383,6 +415,9 @@ public class AwsIotRecon {
         }
 
         // Determine authentication mechanism
+        boolean customAuth = false;
+        boolean sigV4Auth  = false;
+        
         if (cmd.hasOption("c") && cmd.hasOption("k")) {
             // mTLS using specified client certificate and private key
             String cert = Util.getTextFileDataFromOptionalPath(cmd.getOptionValue("c"));
@@ -429,6 +464,7 @@ public class AwsIotRecon {
                     || cmd.hasOption("custom-auth-tok-name") || cmd.hasOption("custom-auth-tok-val")
                     || cmd.hasOption("custom-auth-user") || cmd.hasOption("custom-auth-pass")) {
             // Custom authentication
+            customAuth = true;
             connBuilder = AwsIotMqttConnectionBuilder.newDefaultBuilder();
             connBuilder = connBuilder.withCustomAuthorizer(
                 cmd.getOptionValue("custom-auth-user"),
@@ -440,8 +476,98 @@ public class AwsIotRecon {
             );
             tlsCtxOpts = TlsContextOptions.createDefaultClient();
 
+        } else if (cmd.hasOption("w")) {
+            connBuilder = AwsIotMqttConnectionBuilder.newDefaultBuilder();
+            connBuilder = connBuilder.withWebsockets(true);
+
+            if (!cmd.hasOption("r")) {
+                System.err.println("[ERROR] MQTT over WebSocket requires region (\"-r\")");
+                System.exit(1);
+            }
+            // @TODO: Implement Cognito authentication flows
+            // if (cmd.hasOption("u") && cmd.hasOption("p")
+            //      && cmd.hasOption("cognito-auth-flow") && cmd.hasOption("cognito-client-id")
+            //      && cmd.hasOption("cognito-identity-pool-id") && cmd.hasOption("cognito-user-pool-id")) {
+            //     sigV4Auth = true;
+            //     Region region = Region.of(cmd.getOptionValue("r"));
+            //     String userPoolId = cmd.getOptionValue("cognito-user-pool-id");
+            //     CognitoIdentityProviderClient cognitoClient = CognitoIdentityProviderClient.builder().region(region).build();
+            //     AuthFlowType authFlow = AuthFlowType.valueOf(cmd.getOptionValue("cognito-auth-flow"));
+            //     Map<String, String> authParams = new HashMap<>();
+            //
+            //     // authParams.put("DEVICE_KEY", "abcdevicekey");  // @TODO: Do we even need this field? (I don't think so)
+            //
+            //     switch (authFlow) {
+            //         case USER_SRP_AUTH:
+            //             authParams.put("USERNAME", cmd.getOptionValue("u"));
+            //             // authParams.put("SECRET_HASH", cmd.getOptionValue("p"));  // @TODO
+            //             // @TODO: Add and use this class to generate a secure SRP_A value:
+            //             // https://github.com/aws/aws-sdk-java/issues/1403#issuecomment-352073758
+            //             authParams.put("SRP_A", "553CD35F53991F47A7E868542861E2FB02A5DAA4FB01D038668D0B68823B4445CACBCD8671A596F1E2CE2ED6CD8DA72909876930B225FE1D84E7D441CCFE99987DAC13ADD0D2EB36E6840E31916C186F8C36C2FDA559BACE8CE9AAC8284AF3EC82CBC951B4156AD8CCF608BA805EF86D0164D58699D646607A760193A62F548EB77D0935C65555B33B488BE7F35756ACD4206767E4F356924AC98113BC4639754D6C3778C68B4E7FC86F2D4F4942FB0731557B19AF13286B1269C1B7E08331BAEC071E1FFA1E928C45406DCE74A0CBD0061220955C2CB36DE20F885AC4394E523A19EA34568D54FC4BFC6E1631F3C9631268AF7221C9E1BD7DBC095298A930A1F6ACDC4A6A4B22484400AF6603DD70DEB746F38BD00640962D42A52345D787E1E3BB4A07D9D7E5BAA9C0681D2A661851909FA4B9702164CD0DE1F5EFCA4A6FACF902F9C26214BF1416299FAAF8A2A83A1DCF57B31230FEA9CA8663AF7FA8FB2A4E7B0A963BD380DEB2753E1B2E18785185EB84B01AACDC9EA777FFFFC176A2F2");
+            //             break;
+            //         case USER_PASSWORD_AUTH:
+            //             authParams.put("USERNAME", cmd.getOptionValue("u"));
+            //             authParams.put("PASSWORD", cmd.getOptionValue("p"));
+            //             break;
+            //         case REFRESH_TOKEN_AUTH:
+            //         case REFRESH_TOKEN:
+            //             authParams.put("REFRESH_TOKEN", cmd.getOptionValue("u"));
+            //             // authParams.put("SECRET_HASH", cmd.getOptionValue("p"));  // @TODO
+            //             break;
+            //         case CUSTOM_AUTH:
+            //             authParams.put("USERNAME", cmd.getOptionValue("u"));
+            //             // authParams.put("SECRET_HASH", cmd.getOptionValue("p"));  // @TODO
+            //             break;
+            //         default:
+            //             System.err.println("[ERROR] Unsupported auth flow type: " + cmd.getOptionValue("cognito-auth-flow"));
+            //             System.exit(1);
+            //             break;
+            //     }
+            //     InitiateAuthRequest authRequest = InitiateAuthRequest.builder()
+            //                                         .authFlow(authFlow)
+            //                                         .clientId(cmd.getOptionValue("cognito-client-id"))
+            //                                         .authParameters(authParams)
+            //                                         .build();
+            //     InitiateAuthResponse authResponse = cognitoClient.initiateAuth(authRequest);
+            //     AuthenticationResultType authenticationResult = authResponse.authenticationResult();
+            //     CognitoIdentityClient cognitoIdentityClient = CognitoIdentityClient.builder().region(region).build();
+            //     GetIdRequest getIdRequest = GetIdRequest.builder()
+            //                                 .identityPoolId(cmd.getOptionValue("cognito-identity-pool-id"))
+            //                                 .logins(Map.of("cognito-idp." + region.id() + ".amazonaws.com/" + userPoolId, authenticationResult.idToken()))
+            //                                 .build();
+            //     GetIdResponse getIdResponse = cognitoIdentityClient.getId(getIdRequest);
+            //     String identityId = getIdResponse.identityId();
+            //     GetCredentialsForIdentityRequest getCredsForIdReq = GetCredentialsForIdentityRequest.builder()
+            //                                                          .identityId(identityId)
+            //                                                          .logins(Map.of("cognito-idp." + region.id() + ".amazonaws.com/" + userPoolId, authenticationResult.idToken()))
+            //                                                          .build();
+            //     GetCredentialsForIdentityResponse getCredsForIdResp = cognitoIdentityClient.getCredentialsForIdentity(getCredsForIdReq);
+            //     StaticCredentialsProvider staticCredsProvider = new StaticCredentialsProvider.StaticCredentialsProviderBuilder()
+            //                                                         .withAccessKeyId​(getCredsForIdResp.credentials().accessKeyId().getBytes())
+            //                                                         .withSecretAccessKey​(getCredsForIdResp.credentials().secretKey().getBytes())
+            //                                                         .withSessionToken​(getCredsForIdResp.credentials().sessionToken().getBytes())
+            //                                                         .build();
+            //     connBuilder = connBuilder.withWebsocketCredentialsProvider(staticCredsProvider);
+            //
+            /*} else*/ if (cmd.hasOption("aws-access-key-id") && cmd.hasOption("aws-secret-key")
+                        && cmd.hasOption("aws-session-token")) {
+                sigV4Auth = true;
+                StaticCredentialsProvider staticCredsProvider = new StaticCredentialsProvider.StaticCredentialsProviderBuilder()
+                                                                    .withAccessKeyId​(cmd.getOptionValue("aws-access-key-id").getBytes())
+                                                                    .withSecretAccessKey​(cmd.getOptionValue("aws-secret-key").getBytes())
+                                                                    .withSessionToken​(cmd.getOptionValue("aws-session-token").getBytes())
+                                                                    .build();
+                connBuilder = connBuilder.withWebsocketCredentialsProvider(staticCredsProvider);
+
+            } else {
+                System.err.println("[ERROR] Missing connection parameters (must provide some combination of \"-c\", \"-k\", \"-K\", \"-q\", \"-A\", \"-Q\", \"--custom-auth-*\", \"--cognito-*\", \"--aws-*\", etc.)");
+                System.exit(1);
+            }
+
+            tlsCtxOpts = TlsContextOptions.createDefaultClient();
+
         } else {
-            System.err.println("[ERROR] Missing connection properties (must provide some combination of \"-c\", \"-k\", \"-K\", \"-q\", \"-A\", \"-Q\", \"--custom-auth-*\", etc.)");
+            System.err.println("[ERROR] Missing connection parameters (must provide some combination of \"-c\", \"-k\", \"-K\", \"-q\", \"-A\", \"-Q\", \"--custom-auth-*\", \"--cognito-*\", \"--aws-*\", etc.)");
             System.exit(1);
         }
 
@@ -452,6 +578,23 @@ public class AwsIotRecon {
             clientId = "DEVICE_" + System.currentTimeMillis();
         }
         System.err.println("[INFO] Using client ID: " + clientId);
+
+        if (cmd.hasOption("w")) {
+            // Using MQTT-over-WebSocket
+            if (!(customAuth || sigV4Auth)) {
+                // https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html#protocol-mapping
+                System.err.println("[ERROR] MQTT over WebSocket requires Signature Version 4, AWS/Cognito, or custom authentication");
+                System.exit(1);
+            }
+            connBuilder = connBuilder.withWebsocketSigningRegion​(cmd.getOptionValue("r"));
+        } else {
+            // Not using WebSockets
+            if (sigV4Auth) {
+                // https://docs.aws.amazon.com/iot/latest/developerguide/protocols.html#protocol-mapping
+                System.err.println("[ERROR] Signature Version 4 authentication is only supported in conjunction with MQTT-over-WebSocket (\"-w\")");
+                System.exit(1);
+            }
+        }
 
         // Configure the connection
         connBuilder = connBuilder.withConnectionEventCallbacks(connectionCallbacks);
@@ -480,10 +623,6 @@ public class AwsIotRecon {
         if (cmd.hasOption("U")) {
             tlsCtxOpts = tlsCtxOpts.withVerifyPeer​(false);
         }
-
-        // if (cmd.hasOption("w")) {
-        //     connBuilder = connBuilder.withWebsockets(true);
-        // }
 
 
         // Build
